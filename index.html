@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Estimation des temps d'intervention</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@17/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+  <style>
+    body { font-family: sans-serif; background-color: #00afb5; padding: 1rem; }
+    .piece-time { font-size: 0.875rem; color: #4a5568; flex-shrink: 0; }
+    .btn-highlight {
+      background-color: #ffffff;
+      color: #00afb5;
+      border: 2px solid #ffffff;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .btn-highlight:hover { background-color: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <div class="max-w-2xl mx-auto bg-white p-6 rounded-lg shadow-lg">
+    <h1 id="app-title" class="text-3xl font-bold text-center mb-6 text-[#00afb5]">
+      Estimation des temps d'intervention
+    </h1>
+    <div id="root"></div>
+    <div class="mt-6 bg-gray-100 p-4 rounded shadow">
+      <h2 class="text-lg font-bold mb-2 text-[#00afb5]">Grille de lecture :</h2>
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr><th class="border px-2 py-1">Niveau</th><th class="border px-2 py-1">Description</th><th class="border px-2 py-1">Temps supplémentaire</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="border px-2 py-1">1</td><td class="border px-2 py-1">Très soigné</td><td class="border px-2 py-1">+0%</td></tr>
+          <tr><td class="border px-2 py-1">2</td><td class="border px-2 py-1">Entretien courant</td><td class="border px-2 py-1">+10%</td></tr>
+          <tr><td class="border px-2 py-1">3</td><td class="border px-2 py-1">Entretien approfondi</td><td class="border px-2 py-1">+20%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <script type="text/babel">
+    const { useState } = React;
+    const DUREES = {
+      "Chambre": { min:10, max:20 },
+      "Salon / Séjour": { min:30, max:45 },
+      "Cuisine": { min:30, max:60 },
+      "Salle de bain": { min:25, max:60 },
+      "WC": { min:5, max:10 },
+      "Entrée / Couloir": { min:5, max:10 },
+      "Escalier": { min:5, max:15 },
+      "Salle de jeux": { min:15, max:15 },
+      "Buanderie / Arrière cuisine": { min:8, max:8 },
+      "Bureau": { min:15, max:15 }
+    };
+    const AREA = {
+      "Chambre": 12.5,
+      "Salon / Séjour": 25,
+      "Cuisine": 10,
+      "Salle de bain": 6.5,
+      "WC": 2.5,
+      "Entrée / Couloir": 6.5,
+      "Escalier": 10,
+      "Salle de jeux": 22.5,
+      "Buanderie / Arrière cuisine": 15,
+      "Bureau": 11.5
+    };
+    const COEFF = {1:1.0,2:1.1,3:1.2};
+    const formatTime = m => {
+      const h = Math.floor(m/60), mm = m % 60;
+      return `${h} h ${mm} min`;
+    };
+
+    function App(){
+      const [lignes, setLignes] = useState([{type:"Chambre", quantite:1, customName:"", customTime:0, customArea:0}]);
+      const [etat, setEtat] = useState(2);
+      const [nom, setNom] = useState(""), [prenom, setPrenom] = useState("");
+      const maj = (i, f, v) => {
+        const a = [...lignes];
+        a[i][f] = (f==="quantite"||f==="customTime"||f==="customArea") ? parseFloat(v) : v;
+        setLignes(a);
+      };
+      const ajouter = () => setLignes([...lignes, {type:"Chambre", quantite:1, customName:"", customTime:0, customArea:0}]);
+      const supprimer = i => setLignes(lignes.filter((_, idx)=>idx!==i));
+      const coeff = COEFF[etat]||1.0;
+      const lineData = lignes.map(l => {
+        let label, raw, area;
+        if(l.type==="Autre"){
+          label = l.customName||"Autre";
+          raw = Math.round((l.customTime||0)*coeff*l.quantite);
+          area = (l.customArea||0) * l.quantite;
+        } else {
+          label = l.type;
+          const {min, max} = DUREES[label];
+          raw = Math.round(((min+max)/2)*coeff*l.quantite);
+          area = AREA[label] * l.quantite;
+        }
+        return {quantite:l.quantite, label, raw, time: formatTime(raw), area};
+      });
+      const subtotal = lineData.reduce((s,d)=>s+d.raw, 0);
+      const totalRaw = Math.round(
+        lignes.reduce((s,{type,quantite,customTime})=>{
+          let base = type==="Autre"? (customTime||0): ((DUREES[type].min + DUREES[type].max)/2);
+          return s + base * quantite;
+        },0) * coeff
+      );
+      const totalArea = lineData.reduce((s,d)=>s+d.area,0);
+
+      const exportPDF = () => {
+        const {jsPDF} = window.jspdf; const doc = new jsPDF({unit:'pt'}); let y=40;
+        doc.setFontSize(16); doc.text("Estimation des temps d'intervention",40,y); y+=20;
+        doc.setFontSize(12); doc.text(`Client : ${nom} ${prenom}`,40,y); y+=20;
+        doc.autoTable({
+          startY: y,
+          head: [['Quantité','Pièce','Temps']],
+          body: lineData.map(d=>[d.quantite, d.label, d.time]),
+          theme: 'grid', headStyles: {fillColor: [0,175,181]}
+        });
+        y = doc.lastAutoTable.finalY + 20;
+        doc.text(`Temps total pièces : ${formatTime(subtotal)}`,40,y); y+=20;
+        doc.text(`Surface totale pièces : ${totalArea.toFixed(1)} m²`,40,y);
+        doc.save("devis-entretien.pdf");
+      };
+
+      return (
+        <div className="space-y-6 bg-white p-6 rounded-lg shadow-lg max-w-2xl mx-auto overflow-hidden">
+          <div className="flex gap-4">
+            <input placeholder="Nom" className="flex-1 border rounded px-3 py-2" value={nom} onChange={e=>setNom(e.target.value)}/>
+            <input placeholder="Prénom" className="flex-1 border rounded px-3 py-2" value={prenom} onChange={e=>setPrenom(e.target.value)}/>
+          </div>
+          <div>
+            <h2 className="text-2xl font-semibold mb-3 text-[#00afb5]">Configuration des pièces</h2>
+            {lignes.map((l,i)=>(
+              <div key={i} className="flex flex-wrap items-center gap-2 mb-2">
+                <select className="border rounded px-2 py-1 w-32 flex-shrink-0" value={l.type} onChange={e=>maj(i,'type',e.target.value)}>
+                  {[...Object.keys(DUREES),'Autre'].map(t=><option key={t}>{t}</option>)}
+                </select>
+                <input type="number" min="1" className="border rounded px-2 py-1 w-16 flex-shrink-0" value={l.quantite} onChange={e=>maj(i,'quantite',e.target.value)}/>
+                {l.type==='Autre' && <>
+                  <input placeholder="Nom pièce" className="border rounded px-2 py-1 w-24 flex-shrink-0" value={l.customName} onChange={e=>maj(i,'customName',e.target.value)}/>
+                  <input type="number" placeholder="Temps min" className="border rounded px-2 py-1 w-20 flex-shrink-0" value={l.customTime} onChange={e=>maj(i,'customTime',e.target.value)}/>
+                  <input type="number" placeholder="Surface m²" className="border rounded px-2 py-1 w-20 flex-shrink-0" onChange={e=>maj(i,'customArea',e.target.value)}/>
+                </>}
+                <span className="piece-time">({lineData[i].time}/pièce)</span>
+                <button onClick={()=>supprimer(i)} className="text-red-500 text-xl flex-shrink-0">×</button>
+              </div>
+            ))}
+            <button onClick={ajouter} className="btn-highlight px-4 py-2 rounded">Ajouter une pièce</button>
+            <p className="mt-2 font-medium">Temps total pièces : <strong>{formatTime(subtotal)}</strong></p>
+            <p className="font-medium">Surface totale pièces : <strong>{totalArea.toFixed(1)} m²</strong></p>
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="text-[#00afb5] font-medium">Niveau entretien :</label>
+            <select className="border rounded px-2 py-1 w-48" value={etat} onChange={e=>setEtat(parseInt(e.target.value,10))}>
+              <option value={1}>Très soigné</option><option value={2}>Entretien courant</option><option value={3}>Entretien approfondi</option>
+            </select>
+          </div>
+          <div>
+            <h2 className="text-2xl font-semibold mb-3 text-[#00afb5]">Estimation</h2>
+            <button onClick={exportPDF} className="btn-highlight px-4 py-2 rounded">Exporter PDF</button>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />,document.getElementById("root"));
+  </script>
+</body>
+</html>
